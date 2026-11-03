@@ -1,0 +1,157 @@
+name: education-management-system
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-education_management}
+      POSTGRES_USER: ${DB_USERNAME:-ems}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run php docker/setup-infrastructure.php first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2-alpine
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run php docker/setup-infrastructure.php first}
+    entrypoint: ["/bin/sh", "/opt/ems/redis-start.sh"]
+    volumes:
+      - redis_data:/data
+      - ./docker/redis-start.sh:/opt/ems/redis-start.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  garage:
+    image: dxflrs/garage:v2.5.0
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?Run php docker/setup-infrastructure.php first}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?Run php docker/setup-infrastructure.php first}
+      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_ACCESS_KEY:?Run php docker/setup-infrastructure.php first}
+      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_KEY:?Run php docker/setup-infrastructure.php first}
+      GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:-ems-private}
+    ports:
+      - "127.0.0.1:${GARAGE_PORT:-13900}:3900"
+    volumes:
+      - ./docker/garage.toml:/etc/garage.toml:ro
+      - garage_metadata:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+      - garage_snapshots:/var/lib/garage/snapshots
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  backend:
+    image: education-management-system-backend
+    build: ./backend
+    environment: &backend_environment
+      APP_NAME: Education Management System
+      APP_ENV: production
+      APP_KEY: ${APP_KEY:-}
+      APP_DEBUG: "false"
+      APP_URL: http://localhost:${BACKEND_PORT:-8000}
+      DB_CONNECTION: pgsql
+      DB_HOST: database
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-education_management}
+      DB_USERNAME: ${DB_USERNAME:-ems}
+      DB_PASSWORD: ${DB_PASSWORD:?Run php docker/setup-infrastructure.php first}
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      LOG_CHANNEL: stderr
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      REDIS_CLIENT: predis
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PORT: 6379
+      REDIS_QUEUE_RETRY_AFTER: 120
+      DOCUMENT_STORAGE_DISK: ${DOCUMENT_STORAGE_DISK:-garage}
+      GARAGE_ACCESS_KEY: ${GARAGE_ACCESS_KEY}
+      GARAGE_SECRET_KEY: ${GARAGE_SECRET_KEY}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-ems-private}
+      GARAGE_REGION: garage
+      GARAGE_ENDPOINT: http://garage:3900
+      JWT_SECRET: ${JWT_SECRET:?Run php docker/setup-infrastructure.php first}
+      JWT_ISSUER: ${JWT_ISSUER:-ems-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-ems-api}
+      JWT_TTL_MINUTES: ${JWT_TTL_MINUTES:-15}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:80"
+    volumes:
+      - backend_storage:/var/www/html/storage
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1/api/health') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    image: education-management-system-backend
+    build: ./backend
+    user: www-data
+    environment: *backend_environment
+    command: ["/bin/sh", "/opt/ems/worker-start.sh"]
+    volumes:
+      - backend_storage:/var/www/html/storage
+      - ./docker/worker-start.sh:/opt/ems/worker-start.sh:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/ems-worker.pid && kill -0 \"$$(cat /tmp/ems-worker.pid)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      LARAVEL_API_URL: http://backend/api
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  backend_storage:
+  redis_data:
+  garage_metadata:
+  garage_data:
+  garage_snapshots:
+

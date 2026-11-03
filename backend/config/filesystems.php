@@ -14,6 +14,7 @@ return [
     */
 
     'default' => env('FILESYSTEM_DISK', 'local'),
+    'documents_disk' => env('DOCUMENT_STORAGE_DISK', 'local'),
 
     /*
     |--------------------------------------------------------------------------
@@ -29,6 +30,20 @@ return [
     */
 
     'disks' => [
+        'garage' => [
+            'driver' => 's3',
+            'key' => env('GARAGE_ACCESS_KEY'),
+            'secret' => env('GARAGE_SECRET_KEY'),
+            'region' => env('GARAGE_REGION', 'garage'),
+            'bucket' => env('GARAGE_BUCKET', 'ems-private'),
+            'endpoint' => env('GARAGE_ENDPOINT', 'http://127.0.0.1:13900'),
+            'use_path_style_endpoint' => true,
+            'visibility' => 'private',
+            'request_checksum_calculation' => 'when_required',
+            'response_checksum_validation' => 'when_required',
+            'throw' => true,
+            'report' => false,
+        ],
 
         'local' => [
             'driver' => 'local',

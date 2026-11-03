@@ -38,6 +38,7 @@ return [
     */
 
     'guards' => [
+        'jwt' => ['driver' => 'ems-jwt', 'provider' => 'users'],
         'web' => [
             'driver' => 'session',
             'provider' => 'users',
